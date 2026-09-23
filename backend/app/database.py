@@ -1,7 +1,15 @@
+import os
+
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
-DATABASE_URL = "postgresql://postgres:pradeep007.@localhost:5432/atlas"
+load_dotenv()
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql+psycopg://postgres:postgres@localhost:5432/atlas",
+)
 
 engine = create_engine(DATABASE_URL)
 

@@ -4,11 +4,16 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
+from httpx import HTTPError
+
+from app.integrations.github.client import GitHubClient, GitHubNotConfiguredError
+from app.integrations.jira.client import JiraClient, JiraNotConfiguredError
+from app.config import settings
 
 app = FastAPI(title="ATLAS API", version="0.1.0")
 app.add_middleware(
 	CORSMiddleware,
-	allow_origins=["http://localhost:5173"],
+	allow_origins=list(settings.cors_origins),
 	allow_credentials=True,
 	allow_methods=["*"],
 	allow_headers=["*"],
@@ -41,6 +46,13 @@ class CaptureRequest(BaseModel):
 	answer: str
 
 
+class IntegrationStatus(BaseModel):
+	provider: str
+	configured: bool
+	status: str
+	details: str
+
+
 DEMO_USERS = {
 	"manager@finpay.demo": DemoUser(name="Engineering Manager", email="manager@finpay.demo", role="manager"),
 	"arun@finpay.demo": DemoUser(name="Arun Kumar", email="arun@finpay.demo", role="holder"),
@@ -52,6 +64,24 @@ GAPS = [
 	Gap(id="gateway-timeout", title="Gateway timeout behaviour", description="Implementation exists, context unclear", service="Payment Service", ref="PR-1774", status="Open"),
 	Gap(id="refund-reconciliation", title="Refund reconciliation behaviour", description="Operational context unclear", service="Refund Engine", ref="PAY-398", status="Open"),
 ]
+
+
+@app.get("/api/integrations", response_model=list[IntegrationStatus])
+def integration_status() -> list[IntegrationStatus]:
+	return [
+		IntegrationStatus(
+			provider="github",
+			configured=bool(settings.github_token and (settings.github_org or settings.github_owner)),
+			status="connected" if settings.github_token and (settings.github_org or settings.github_owner) else "not_configured",
+			details="Repository and pull request activity" if settings.github_token and (settings.github_org or settings.github_owner) else "Set GITHUB_TOKEN and GITHUB_ORG or GITHUB_OWNER",
+		),
+		IntegrationStatus(
+			provider="jira",
+			configured=bool(settings.jira_base_url and settings.jira_email and settings.jira_api_token),
+			status="connected" if settings.jira_base_url and settings.jira_email and settings.jira_api_token else "not_configured",
+			details="Projects and issue context" if settings.jira_base_url and settings.jira_email and settings.jira_api_token else "Set JIRA_BASE_URL, JIRA_EMAIL, and JIRA_API_TOKEN",
+		),
+	]
 
 
 @app.get("/health")
@@ -111,6 +141,15 @@ def capture_knowledge(gap_id: str, payload: CaptureRequest) -> Gap:
 
 @app.post("/api/integrations/{provider}/sync")
 def sync_integration(provider: str) -> dict[str, object]:
-	if provider.lower() not in {"github", "jira"}:
-		raise HTTPException(status_code=404, detail="Integration not found")
-	return {"provider": provider, "status": "completed", "completed_at": datetime.now(timezone.utc).isoformat(), "demo": True}
+	try:
+		if provider.lower() == "github":
+			result = GitHubClient().sync_summary()
+		elif provider.lower() == "jira":
+			result = JiraClient().sync_summary()
+		else:
+			raise HTTPException(status_code=404, detail="Integration not found")
+	except (GitHubNotConfiguredError, JiraNotConfiguredError) as error:
+		raise HTTPException(status_code=503, detail=str(error)) from error
+	except HTTPError as error:
+		raise HTTPException(status_code=502, detail="The integration provider could not be reached") from error
+	return {"provider": provider.lower(), "completed_at": datetime.now(timezone.utc).isoformat(), **result}
