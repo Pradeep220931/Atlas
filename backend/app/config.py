@@ -10,7 +10,7 @@ load_dotenv()
 class Settings:
     database_url: str = os.getenv("DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:5432/atlas")
     cors_origins: tuple[str, ...] = tuple(
-        origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if origin.strip()
+        origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if origin.strip()
     )
     github_token: str | None = os.getenv("GITHUB_TOKEN")
     github_org: str | None = os.getenv("GITHUB_ORG")

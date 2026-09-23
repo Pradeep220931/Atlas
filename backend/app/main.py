@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr
 from httpx import HTTPError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from jwt import InvalidTokenError
 
@@ -14,7 +14,7 @@ from app.integrations.github.client import GitHubClient, GitHubNotConfiguredErro
 from app.integrations.jira.client import JiraClient, JiraNotConfiguredError
 from app.config import settings
 from app.database import get_db
-from app.models.entities import User
+from app.models.entities import Integration, KnowledgeGap, Service, User
 from app.security import create_access_token, decode_access_token, verify_password
 
 app = FastAPI(title="ATLAS API", version="0.1.0")
@@ -75,13 +75,6 @@ DEMO_USERS = {
 	"priya@finpay.demo": DemoUser(name="Priya Sharma", email="priya@finpay.demo", role="incoming"),
 	"admin@finpay.demo": DemoUser(name="Admin / CTO", email="admin@finpay.demo", role="admin"),
 }
-GAPS = [
-	Gap(id="payment-retry-policy", title="Payment retry policy", description="Decision exists, rationale not found", service="Payment Service", ref="PR-1823 · PAY-421", status="Open"),
-	Gap(id="gateway-timeout", title="Gateway timeout behaviour", description="Implementation exists, context unclear", service="Payment Service", ref="PR-1774", status="Open"),
-	Gap(id="refund-reconciliation", title="Refund reconciliation behaviour", description="Operational context unclear", service="Refund Engine", ref="PAY-398", status="Open"),
-]
-
-
 @app.get("/api/integrations", response_model=list[IntegrationStatus])
 def integration_status() -> list[IntegrationStatus]:
 	return [
@@ -142,7 +135,11 @@ def me(user: User = Depends(current_user)) -> UserResponse:
 
 
 @app.get("/api/workspace")
-def workspace(user: User = Depends(current_user)) -> dict[str, object]:
+def workspace(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, object]:
+	last_sync = "Not synced"
+	integration = db.scalar(select(Integration).where(Integration.organization_id == user.organization_id, Integration.provider == "github"))
+	if integration and integration.last_synced_at:
+		last_sync = integration.last_synced_at.isoformat()
 	return {
 		"name": "FinPay / Engineering",
 		"organization_id": user.organization_id,
@@ -153,34 +150,46 @@ def workspace(user: User = Depends(current_user)) -> dict[str, object]:
 		"knowledge_gaps": 12,
 		"high_risk_areas": 3,
 		"active_transitions": 1,
-		"last_synced": "8 min ago",
+		"last_synced": last_sync,
 	}
 
 
+def _gap_response(gap: KnowledgeGap, service: Service) -> Gap:
+	refs = {"Payment retry policy": "PR-1823 · PAY-421", "Gateway timeout behaviour": "PR-1774", "Refund reconciliation behaviour": "PAY-398"}
+	slug = gap.title.lower().replace(" ", "-")
+	return Gap(id=slug, title=gap.title, description=gap.description, service=service.name, ref=refs.get(gap.title, "Connected source evidence"), status="Validated" if gap.status == "validated" else "Open")
+
+
 @app.get("/api/knowledge-gaps", response_model=list[Gap])
-def list_knowledge_gaps() -> list[Gap]:
-	return GAPS
+def list_knowledge_gaps(user: User = Depends(current_user), db: Session = Depends(get_db)) -> list[Gap]:
+	rows = db.execute(select(KnowledgeGap, Service).join(Service, KnowledgeGap.service_id == Service.id).where(Service.organization_id == user.organization_id)).all()
+	return [_gap_response(gap, service) for gap, service in rows]
 
 
 @app.get("/api/knowledge-gaps/{gap_id}", response_model=Gap)
-def get_knowledge_gap(gap_id: str) -> Gap:
-	for gap in GAPS:
-		if gap.id == gap_id:
-			return gap
+def get_knowledge_gap(gap_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> Gap:
+	rows = db.execute(select(KnowledgeGap, Service).join(Service, KnowledgeGap.service_id == Service.id).where(Service.organization_id == user.organization_id)).all()
+	for gap, service in rows:
+		if gap.title.lower().replace(" ", "-") == gap_id:
+			return _gap_response(gap, service)
 	raise HTTPException(status_code=404, detail="Knowledge gap not found")
 
 
 @app.post("/api/knowledge-gaps/{gap_id}/capture", response_model=Gap)
-def capture_knowledge(gap_id: str, payload: CaptureRequest) -> Gap:
+def capture_knowledge(gap_id: str, payload: CaptureRequest, user: User = Depends(require_roles("manager", "holder")), db: Session = Depends(get_db)) -> Gap:
 	if not payload.answer.strip():
 		raise HTTPException(status_code=422, detail="An answer is required")
-	gap = get_knowledge_gap(gap_id)
-	gap.status = "Validated"
-	return gap
+	rows = db.execute(select(KnowledgeGap, Service).join(Service, KnowledgeGap.service_id == Service.id).where(Service.organization_id == user.organization_id)).all()
+	for gap, service in rows:
+		if gap.title.lower().replace(" ", "-") == gap_id:
+			gap.status = "validated"
+			db.commit()
+			return _gap_response(gap, service)
+	raise HTTPException(status_code=404, detail="Knowledge gap not found")
 
 
 @app.post("/api/integrations/{provider}/sync")
-def sync_integration(provider: str) -> dict[str, object]:
+def sync_integration(provider: str, user: User = Depends(require_roles("manager", "admin")), db: Session = Depends(get_db)) -> dict[str, object]:
 	try:
 		if provider.lower() == "github":
 			result = GitHubClient().sync_summary()
@@ -192,4 +201,12 @@ def sync_integration(provider: str) -> dict[str, object]:
 		raise HTTPException(status_code=503, detail=str(error)) from error
 	except HTTPError as error:
 		raise HTTPException(status_code=502, detail="The integration provider could not be reached") from error
-	return {"provider": provider.lower(), "completed_at": datetime.now(timezone.utc).isoformat(), **result}
+	completed_at = datetime.now(timezone.utc)
+	integration = db.scalar(select(Integration).where(Integration.organization_id == user.organization_id, Integration.provider == provider.lower()))
+	if integration is None:
+		integration = Integration(organization_id=user.organization_id, provider=provider.lower())
+		db.add(integration)
+	integration.status = "connected"
+	integration.last_synced_at = completed_at
+	db.commit()
+	return {"provider": provider.lower(), "completed_at": completed_at.isoformat(), **result}

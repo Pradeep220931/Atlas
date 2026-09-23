@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { clearSession, getCurrentUser, getKnowledgeGaps, login as apiLogin } from './api'
+import { captureKnowledge, clearSession, getCurrentUser, getKnowledgeGaps, getWorkspace, login as apiLogin, syncIntegration } from './api'
 
 export type Role = 'manager' | 'holder' | 'incoming' | 'admin'
 export type User = { name: string; email: string; role: Role }
@@ -27,7 +27,7 @@ const initialAreas: TransitionArea[] = [
 type AtlasContextValue = {
   user: User | null; gaps: Gap[]; areas: TransitionArea[]; lastSync: string; syncing: boolean; unread: number
   login: (email: string, password: string) => Promise<boolean>; logout: () => void; switchRole: (role: Role) => void
-  validateGap: (id: string) => void; createTransition: () => void; verifyArea: (name: string) => void; sync: () => void; markRead: () => void
+  validateGap: (id: string, answer?: string) => Promise<void>; createTransition: () => void; verifyArea: (name: string) => void; sync: () => void; markRead: () => void
 }
 const AtlasContext = createContext<AtlasContextValue | null>(null)
 
@@ -46,15 +46,16 @@ export function AtlasProvider({ children }: { children: ReactNode }) {
     if (!localStorage.getItem('atlas-token')) return
     getCurrentUser().then(apiUser => setUser(apiUser as User)).catch(() => { clearSession(); setUser(null) })
     getKnowledgeGaps().then(apiGaps => setGaps(apiGaps.map(gap => ({ ...gap, status: gap.status.toLowerCase() === 'validated' ? 'Validated' : 'Open' })))).catch(() => undefined)
+    getWorkspace().then(workspace => setLastSync(workspace.last_synced)).catch(() => undefined)
   }, [])
   const value = useMemo(() => ({ user, gaps, areas, lastSync, syncing, unread,
     login: async (email: string, password: string) => { try { setUser(await apiLogin(email, password) as User); return true } catch { return false } },
     logout: () => { clearSession(); setUser(null) },
     switchRole: (role: Role) => setUser(demoUsers.find(item => item.role === role) ?? null),
-    validateGap: (id: string) => setGaps(current => current.map(gap => gap.id === id ? { ...gap, status: 'Validated' } : gap)),
+    validateGap: async (id: string, answer = 'Validated technical context') => { await captureKnowledge(id, answer); setGaps(current => current.map(gap => gap.id === id ? { ...gap, status: 'Validated' } : gap)) },
     createTransition: () => setAreas(initialAreas),
     verifyArea: (name: string) => setAreas(current => current.map(area => area.name === name ? { ...area, status: 'Verified' } : area)),
-    sync: () => { setSyncing(true); window.setTimeout(() => { setSyncing(false); setLastSync('Just now'); setUnread(current => current + 1) }, 1200) },
+    sync: () => { setSyncing(true); syncIntegration('github').then(() => { setLastSync('Just now'); setUnread(current => current + 1) }).catch(() => undefined).finally(() => setSyncing(false)) },
     markRead: () => setUnread(0),
   }), [user, gaps, areas, lastSync, syncing, unread])
   return <AtlasContext.Provider value={value}>{children}</AtlasContext.Provider>
