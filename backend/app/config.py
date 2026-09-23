@@ -8,6 +8,7 @@ load_dotenv()
 
 @dataclass(frozen=True)
 class Settings:
+    database_url: str = os.getenv("DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:5432/atlas")
     cors_origins: tuple[str, ...] = tuple(
         origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if origin.strip()
     )
@@ -20,6 +21,8 @@ class Settings:
     jira_project_keys: tuple[str, ...] = tuple(
         key.strip() for key in os.getenv("JIRA_PROJECT_KEYS", "").split(",") if key.strip()
     )
+    jwt_secret: str = os.getenv("JWT_SECRET", "change-me-in-production-use-a-long-secret")
+    jwt_expire_minutes: int = int(os.getenv("JWT_EXPIRE_MINUTES", "60"))
 
 
 settings = Settings()

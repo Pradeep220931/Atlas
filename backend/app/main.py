@@ -1,14 +1,21 @@
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr
 from httpx import HTTPError
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+from jwt import InvalidTokenError
 
 from app.integrations.github.client import GitHubClient, GitHubNotConfiguredError
 from app.integrations.jira.client import JiraClient, JiraNotConfiguredError
 from app.config import settings
+from app.database import get_db
+from app.models.entities import User
+from app.security import create_access_token, decode_access_token, verify_password
 
 app = FastAPI(title="ATLAS API", version="0.1.0")
 app.add_middleware(
@@ -53,6 +60,15 @@ class IntegrationStatus(BaseModel):
 	details: str
 
 
+class UserResponse(BaseModel):
+	name: str
+	email: EmailStr
+	role: Role
+
+
+security = HTTPBearer(auto_error=False)
+
+
 DEMO_USERS = {
 	"manager@finpay.demo": DemoUser(name="Engineering Manager", email="manager@finpay.demo", role="manager"),
 	"arun@finpay.demo": DemoUser(name="Arun Kumar", email="arun@finpay.demo", role="holder"),
@@ -90,22 +106,46 @@ def health() -> dict[str, str]:
 
 
 @app.post("/api/auth/login")
-def login(payload: LoginRequest) -> dict[str, object]:
-	user = DEMO_USERS.get(str(payload.email).lower())
-	if user is None:
-		raise HTTPException(status_code=401, detail="Invalid demo credentials")
-	return {"access_token": f"demo:{user.role}", "token_type": "bearer", "user": user}
+def login(payload: LoginRequest, db: Session = Depends(get_db)) -> dict[str, object]:
+	user = db.scalar(select(User).where(User.email == str(payload.email).lower(), User.is_active.is_(True)))
+	if user is None or not verify_password(payload.password, user.password_hash):
+		raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+	token = create_access_token(str(user.id), user.role, user.organization_id)
+	return {"access_token": token, "token_type": "bearer", "user": UserResponse(name=user.name, email=user.email, role=user.role)}
 
 
-@app.get("/api/me", response_model=DemoUser)
-def current_user() -> DemoUser:
-	return DEMO_USERS["manager@finpay.demo"]
+def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(security), db: Session = Depends(get_db)) -> User:
+	if credentials is None:
+		raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+	try:
+		claims = decode_access_token(credentials.credentials)
+		user_id = int(claims["sub"])
+	except (InvalidTokenError, KeyError, TypeError, ValueError) as error:
+		raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token") from error
+	user = db.get(User, user_id)
+	if user is None or not user.is_active or user.organization_id != claims.get("organization_id"):
+		raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is not active")
+	return user
+
+
+def require_roles(*roles: Role):
+	def dependency(user: User = Depends(current_user)) -> User:
+		if user.role not in roles:
+			raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+		return user
+	return dependency
+
+
+@app.get("/api/me", response_model=UserResponse)
+def me(user: User = Depends(current_user)) -> UserResponse:
+	return UserResponse(name=user.name, email=user.email, role=user.role)
 
 
 @app.get("/api/workspace")
-def workspace() -> dict[str, object]:
+def workspace(user: User = Depends(current_user)) -> dict[str, object]:
 	return {
 		"name": "FinPay / Engineering",
+		"organization_id": user.organization_id,
 		"demo": True,
 		"engineers": 64,
 		"teams": 5,
