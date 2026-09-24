@@ -23,6 +23,8 @@ class Settings:
     )
     jwt_secret: str = os.getenv("JWT_SECRET", "change-me-in-production-use-a-long-secret")
     jwt_expire_minutes: int = int(os.getenv("JWT_EXPIRE_MINUTES", "60"))
+    supabase_url: str | None = os.getenv("SUPABASE_URL")
+    supabase_jwt_secret: str | None = os.getenv("SUPABASE_JWT_SECRET")
 
 
 settings = Settings()
