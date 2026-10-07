@@ -1,10 +1,7 @@
-import { supabase } from './supabase'
-
 const API_URL = (import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:8000').replace(/\/$/, '')
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const { data } = supabase ? await supabase.auth.getSession() : { data: { session: null } }
-  const token = data.session?.access_token ?? localStorage.getItem('atlas-token')
+  const token = localStorage.getItem('atlas-token')
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers },
@@ -18,11 +15,9 @@ export type ApiGap = { id: string; title: string; description: string; service: 
 export type IntegrationStatus = { provider: string; configured: boolean; status: string; details: string }
 
 export async function login(email: string, password: string) {
-  if (!supabase) throw new Error('Supabase authentication is not configured')
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-  if (error || !data.session) throw new Error(error?.message ?? 'Unable to sign in')
-  localStorage.setItem('atlas-token', data.session.access_token)
-  return request<ApiUser>('/api/me')
+  const result = await request<{ access_token: string; user: ApiUser }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) })
+  localStorage.setItem('atlas-token', result.access_token)
+  return result.user
 }
 
 export function getCurrentUser() { return request<ApiUser>('/api/me') }
@@ -31,4 +26,4 @@ export function captureKnowledge(id: string, answer: string) { return request<Ap
 export function getIntegrations() { return request<IntegrationStatus[]>('/api/integrations') }
 export function syncIntegration(provider: string) { return request<Record<string, unknown>>(`/api/integrations/${provider}/sync`, { method: 'POST' }) }
 export function getWorkspace() { return request<{ last_synced: string }>('/api/workspace') }
-export async function clearSession() { localStorage.removeItem('atlas-token'); if (supabase) await supabase.auth.signOut() }
+export function clearSession() { localStorage.removeItem('atlas-token') }

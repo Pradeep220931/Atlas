@@ -15,7 +15,7 @@ from app.integrations.jira.client import JiraClient, JiraNotConfiguredError
 from app.config import settings
 from app.database import get_db
 from app.models.entities import Integration, KnowledgeGap, Service, User
-from app.security import decode_supabase_token
+from app.security import create_access_token, decode_access_token, verify_password
 
 app = FastAPI(title="ATLAS API", version="0.1.0")
 app.add_middleware(
@@ -27,6 +27,11 @@ app.add_middleware(
 )
 
 Role = Literal["manager", "holder", "incoming", "admin"]
+
+
+class LoginRequest(BaseModel):
+	email: EmailStr
+	password: str
 
 
 class DemoUser(BaseModel):
@@ -64,6 +69,12 @@ class UserResponse(BaseModel):
 security = HTTPBearer(auto_error=False)
 
 
+DEMO_USERS = {
+	"manager@finpay.demo": DemoUser(name="Engineering Manager", email="manager@finpay.demo", role="manager"),
+	"arun@finpay.demo": DemoUser(name="Arun Kumar", email="arun@finpay.demo", role="holder"),
+	"priya@finpay.demo": DemoUser(name="Priya Sharma", email="priya@finpay.demo", role="incoming"),
+	"admin@finpay.demo": DemoUser(name="Admin / CTO", email="admin@finpay.demo", role="admin"),
+}
 @app.get("/api/integrations", response_model=list[IntegrationStatus])
 def integration_status() -> list[IntegrationStatus]:
 	return [
@@ -87,18 +98,25 @@ def health() -> dict[str, str]:
 	return {"status": "ok", "service": "atlas-api"}
 
 
+@app.post("/api/auth/login")
+def login(payload: LoginRequest, db: Session = Depends(get_db)) -> dict[str, object]:
+	user = db.scalar(select(User).where(User.email == str(payload.email).lower(), User.is_active.is_(True)))
+	if user is None or not verify_password(payload.password, user.password_hash):
+		raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+	token = create_access_token(str(user.id), user.role, user.organization_id)
+	return {"access_token": token, "token_type": "bearer", "user": UserResponse(name=user.name, email=user.email, role=user.role)}
+
+
 def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(security), db: Session = Depends(get_db)) -> User:
 	if credentials is None:
 		raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 	try:
-		claims = decode_supabase_token(credentials.credentials)
-		email = str(claims.get("email", "")).lower()
-		if not email:
-			raise InvalidTokenError("Supabase token has no email claim")
+		claims = decode_access_token(credentials.credentials)
+		user_id = int(claims["sub"])
 	except (InvalidTokenError, KeyError, TypeError, ValueError) as error:
 		raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token") from error
-	user = db.scalar(select(User).where(User.email == email, User.is_active.is_(True)))
-	if user is None:
+	user = db.get(User, user_id)
+	if user is None or not user.is_active or user.organization_id != claims.get("organization_id"):
 		raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User is not active")
 	return user
 

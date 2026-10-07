@@ -8,7 +8,10 @@ load_dotenv()
 
 @dataclass(frozen=True)
 class Settings:
-    database_url: str = os.getenv("DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:5432/atlas")
+    database_url: str = os.getenv("SUPABASE_DATABASE_URL") or os.getenv(
+        "DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:5432/atlas"
+    )
+    supabase_database_url: str | None = os.getenv("SUPABASE_DATABASE_URL")
     cors_origins: tuple[str, ...] = tuple(
         origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if origin.strip()
     )
@@ -23,8 +26,6 @@ class Settings:
     )
     jwt_secret: str = os.getenv("JWT_SECRET", "change-me-in-production-use-a-long-secret")
     jwt_expire_minutes: int = int(os.getenv("JWT_EXPIRE_MINUTES", "60"))
-    supabase_url: str | None = os.getenv("SUPABASE_URL")
-    supabase_jwt_secret: str | None = os.getenv("SUPABASE_JWT_SECRET")
 
 
 settings = Settings()
