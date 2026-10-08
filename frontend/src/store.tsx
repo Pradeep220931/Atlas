@@ -3,7 +3,7 @@ import { captureKnowledge, clearSession, getCurrentUser, getKnowledgeGaps, getWo
 
 export type Role = 'manager' | 'holder' | 'incoming' | 'admin'
 export type User = { name: string; email: string; role: Role }
-export type Gap = { id: string; title: string; description: string; service: string; ref: string; status: 'Open' | 'Validated' }
+export type Gap = { id: string; title: string; description: string; service: string; ref: string; status: 'Open' | 'Validated'; ai_analysis?: import('./api').ApiGap['ai_analysis'] }
 export type TransitionArea = { name: string; status: 'Verified' | 'Needs review' }
 
 export const demoUsers: User[] = [
@@ -21,7 +21,7 @@ const initialAreas: TransitionArea[] = [
 type AtlasContextValue = {
   user: User | null; gaps: Gap[]; areas: TransitionArea[]; lastSync: string; syncing: boolean; unread: number
   login: (email: string, password: string) => Promise<boolean>; logout: () => void; switchRole: (role: Role) => void
-  validateGap: (id: string, answer: string) => Promise<void>; reviewKnowledge: (id: string, recordId: number, decision: 'approve' | 'reject' | 'request_clarification', comment?: string) => Promise<void>; createTransition: () => void; verifyArea: (name: string) => void; sync: () => void; markRead: () => void
+  refreshGaps: () => Promise<void>; validateGap: (id: string, answer: string) => Promise<void>; reviewKnowledge: (id: string, recordId: number, decision: 'approve' | 'reject' | 'request_clarification', comment?: string) => Promise<void>; createTransition: () => void; verifyArea: (name: string) => void; sync: () => void; markRead: () => void
 }
 const AtlasContext = createContext<AtlasContextValue | null>(null)
 
@@ -43,6 +43,7 @@ export function AtlasProvider({ children }: { children: ReactNode }) {
     getWorkspace().then(workspace => setLastSync(workspace.last_synced)).catch(() => undefined)
   }, [])
   const value = useMemo(() => ({ user, gaps, areas, lastSync, syncing, unread,
+    refreshGaps: async () => { const apiGaps = await getKnowledgeGaps(); setGaps(apiGaps.map(gap => ({ ...gap, status: gap.status.toLowerCase() === 'validated' ? 'Validated' : 'Open' }))) },
     login: async (email: string, password: string) => { try { setUser(await apiLogin(email, password) as User); const apiGaps = await getKnowledgeGaps(); setGaps(apiGaps.map(gap => ({ ...gap, status: gap.status.toLowerCase() === 'validated' ? 'Validated' : 'Open' }))); const workspace = await getWorkspace(); setLastSync(workspace.last_synced); return true } catch { return false } },
     logout: () => { clearSession(); setUser(null) },
     switchRole: (role: Role) => setUser(demoUsers.find(item => item.role === role) ?? null),
