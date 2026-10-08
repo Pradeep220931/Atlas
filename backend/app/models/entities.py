@@ -104,6 +104,7 @@ class KnowledgeRecord(Base):
     affected_system: Mapped[str] = mapped_column(String(160))
     related_incident: Mapped[str | None] = mapped_column(String(160), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="proposed")
+    submitted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     validated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

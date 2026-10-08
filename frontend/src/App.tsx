@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Navigate, NavLink, Outlet, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Activity, ArrowRight, Bell, BookOpen, Check, ChevronDown, CircleAlert, Database, FileText, GitBranch, LayoutDashboard, LogOut, Map, Menu, Search, Settings, Shield, SlidersHorizontal, Users, X, Zap } from 'lucide-react'
 import { demoUsers, progress, useAtlas, type Role, type TransitionArea } from './store'
+import { getKnowledgeRecords, type ApiKnowledgeRecord } from './api'
 
 const roleLabels: Record<Role, string> = { manager: 'Engineering Manager', holder: 'Knowledge Holder', incoming: 'Incoming Engineer', admin: 'Admin / CTO' }
 const nav: Record<Role, { label: string; to: string; icon: typeof Map }[]> = {
@@ -53,7 +54,74 @@ function RiskArea() { const navigate = useNavigate(); return <Page eyebrow="RISK
 
 function KnowledgeGaps() { const { gaps } = useAtlas(); const navigate = useNavigate(); return <Page eyebrow="KNOWLEDGE" title="Knowledge Gaps" subtitle="Open questions grounded in connected engineering evidence."><div className="toolbar"><div className="segmented"><button className="selected">All <span>12</span></button><button>Critical <span>3</span></button><button>Open</button><button>Validated</button></div><button className="quiet"><SlidersHorizontal size={15} /> Filter</button></div><div className="gap-list">{gaps.map(gap => <article className="gap-card" key={gap.id}><div><div className="card-meta"><Badge tone={gap.status === 'Validated' ? 'healthy' : 'attention'}>{gap.status}</Badge><span>{gap.service}</span></div><h2>{gap.title}</h2><p>{gap.description}</p><small>{gap.ref}</small></div><button className="secondary" onClick={() => navigate(`/app/knowledge/capture/${gap.id}`)}>{gap.status === 'Validated' ? 'View record' : 'Capture'} <ArrowRight size={15} /></button></article>)}</div></Page> }
 
-function Capture() { const { id } = useParams(); const { gaps, validateGap, user } = useAtlas(); const navigate = useNavigate(); const gap = gaps.find(item => item.id === id) ?? gaps[0]; const [answer, setAnswer] = useState(''); const [saved, setSaved] = useState(gap.status === 'Validated'); return <Page eyebrow="KNOWLEDGE CAPTURE" title="Capture knowledge" subtitle={`${gap.service} / ${gap.title}`}><div className="capture-layout"><div className="capture-main"><div className="notice"><CircleAlert size={18} /><span>We found implementation evidence for this decision, but couldn't find its rationale in the connected sources.</span></div><div className="question-block"><span className="eyebrow">TARGETED QUESTION</span><h2>{gap.id === 'payment-retry-policy' ? 'Why was the payment retry limit changed from 5 to 3?' : 'What context should the next engineer understand?'}</h2><textarea value={answer} onChange={event => setAnswer(event.target.value)} placeholder="Share the technical reasoning, constraints, and trade-offs..." disabled={saved} /></div>{!saved ? <button className="primary" onClick={() => setSaved(true)} disabled={!answer.trim()}>Save & continue <ArrowRight size={16} /></button> : <div className="proposed"><div className="card-meta"><Badge tone="info">Proposed knowledge</Badge></div><h3>Decision: {gap.id === 'payment-retry-policy' ? 'Retry limit is 3' : 'Operational context captured'}</h3><p>{answer || 'Prevents duplicate transactions with Gateway X.'}</p><div className="proposal-actions"><button className="primary" onClick={() => { validateGap(gap.id); navigate('/app/knowledge-gaps') }}>Confirm <Check size={15} /></button><button className="secondary" onClick={() => setSaved(false)}>Edit</button></div></div>}</div><aside className="capture-side"><span className="eyebrow">EVIDENCE</span><h3>Connected sources</h3><div className="source"><GitBranch size={16} /><span><strong>PR-1823</strong><small>GitHub pull request</small></span></div><div className="source"><FileText size={16} /><span><strong>PAY-421</strong><small>Jira issue</small></span></div><div className="source"><Activity size={16} /><span><strong>INC-241</strong><small>Production incident</small></span></div><small className="muted">Validated by {user?.name === 'Arun Kumar' ? 'Arun Kumar' : 'a knowledge holder'} after confirmation.</small></aside></div></Page> }
+function Capture() {
+  const { id = '' } = useParams()
+  const { gaps, validateGap, reviewKnowledge, user } = useAtlas()
+  const gap = gaps.find(item => item.id === id)
+  const [answer, setAnswer] = useState('')
+  const [records, setRecords] = useState<ApiKnowledgeRecord[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  async function refreshRecords() {
+    setRecords(await getKnowledgeRecords(id))
+  }
+
+  useEffect(() => {
+    let active = true
+    getKnowledgeRecords(id).then(items => { if (active) setRecords(items) }).catch(reason => { if (active) setError(String(reason)) }).finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [id])
+
+  async function submitAnswer() {
+    setSaving(true)
+    setError('')
+    try {
+      await validateGap(id, answer)
+      await refreshRecords()
+      setAnswer('')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to submit knowledge.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function review(recordId: number, decision: 'approve' | 'reject' | 'request_clarification') {
+    setSaving(true)
+    setError('')
+    try {
+      await reviewKnowledge(id, recordId, decision)
+      await refreshRecords()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to review this proposal.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!gap) return <Page eyebrow="KNOWLEDGE CAPTURE" title="Knowledge gap unavailable" subtitle="The gap could not be loaded from the API."><p>Return to Knowledge Gaps and try again after the list loads.</p></Page>
+  return <Page eyebrow="KNOWLEDGE CAPTURE" title="Capture knowledge" subtitle={`${gap.service} / ${gap.title}`}>
+    <div className="capture-layout">
+      <div className="capture-main">
+        <div className="notice"><CircleAlert size={18} /><span>No supporting evidence is linked to this gap. Submitted context remains a proposal until a manager reviews it.</span></div>
+        <div className="question-block"><span className="eyebrow">TARGETED QUESTION</span><h2>What context should the next engineer understand about {gap.title.toLowerCase()}?</h2><textarea value={answer} onChange={event => setAnswer(event.target.value)} placeholder="Share the technical reasoning, constraints, and trade-offs..." /></div>
+        {error && <p className="error-text" role="alert">{error}</p>}
+        <button className="primary" onClick={submitAnswer} disabled={!answer.trim() || saving}>{saving ? 'Submitting...' : 'Submit proposal'} <ArrowRight size={16} /></button>
+        <Section title="Submitted knowledge">
+          {loading ? <p>Loading submitted knowledge...</p> : records.length === 0 ? <p>No answers have been submitted for this gap.</p> : records.map(record => <article className="proposed" key={record.id}>
+            <div className="card-meta"><Badge tone={record.status === 'validated' ? 'healthy' : record.status === 'proposed' ? 'info' : 'attention'}>{record.status.replace('_', ' ')}</Badge><span>{record.submitted_by ? `Submitted by ${record.submitted_by}` : 'Submitter unavailable'}</span></div>
+            <h3>{record.decision}</h3><p>{record.reason}</p>
+            {record.status === 'validated' && <small>Validated by {record.validated_by ?? 'manager'}</small>}
+            {user?.role === 'manager' && record.status === 'proposed' && <div className="proposal-actions"><button className="primary" disabled={saving} onClick={() => review(record.id, 'approve')}>Approve <Check size={15} /></button><button className="secondary" disabled={saving} onClick={() => review(record.id, 'request_clarification')}>Request clarification</button><button className="secondary" disabled={saving} onClick={() => review(record.id, 'reject')}>Reject</button></div>}
+          </article>)}
+        </Section>
+      </div>
+      <aside className="capture-side"><span className="eyebrow">EVIDENCE</span><h3>Source references</h3><p>{gap.ref}</p><small className="muted">Only linked source records are shown here.</small></aside>
+    </div>
+  </Page>
+}
 
 function NewTransition() { const navigate = useNavigate(); const { createTransition } = useAtlas(); return <Page eyebrow="TRANSITIONS" title="Start transition" subtitle="Create a focused transfer plan for a critical system."><div className="form-card"><div className="form-grid"><label>Outgoing engineer<input value="Arun Kumar" readOnly /></label><label>Incoming engineer<input value="Priya Sharma" readOnly /></label><label>System<select defaultValue="Payment Service"><option>Payment Service</option><option>Refund Engine</option></select></label></div><Section title="Knowledge areas"><div className="check-list">{['Payment architecture','Retry mechanism','Gateway behaviour','Refund reconciliation','Deployment'].map((area, index) => <div key={area}><span className={index < 3 ? 'check checked' : 'check'}>{index < 3 && <Check size={13} />}</span><span>{area}</span><Badge tone={index < 3 ? 'healthy' : 'attention'}>{index < 3 ? 'Ready' : 'Needs review'}</Badge></div>)}</div></Section><button className="primary" onClick={() => { createTransition(); navigate('/app/transitions/payment-service') }}>Create transition plan <ArrowRight size={16} /></button></div></Page> }
 
