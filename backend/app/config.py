@@ -24,6 +24,11 @@ class Settings:
     jira_project_keys: tuple[str, ...] = tuple(
         key.strip() for key in os.getenv("JIRA_PROJECT_KEYS", "").split(",") if key.strip()
     )
+    ai_provider: str = os.getenv("AI_PROVIDER", "anthropic").strip().lower()
+    anthropic_auth_token: str | None = os.getenv("ANTHROPIC_AUTH_TOKEN")
+    anthropic_api_key: str | None = os.getenv("ANTHROPIC_API_KEY")
+    anthropic_base_url: str | None = os.getenv("ANTHROPIC_BASE_URL")
+    anthropic_model: str | None = os.getenv("ANTHROPIC_MODEL")
     jwt_secret: str = os.getenv("JWT_SECRET", "change-me-in-production-use-a-long-secret")
     jwt_expire_minutes: int = int(os.getenv("JWT_EXPIRE_MINUTES", "60"))
 
