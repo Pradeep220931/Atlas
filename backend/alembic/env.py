@@ -10,7 +10,8 @@ from app.models import entities  # noqa: F401
 config = context.config
 if config.config_file_name:
     fileConfig(config.config_file_name)
-config.set_main_option("sqlalchemy.url", settings.database_url)
+if not config.get_main_option("sqlalchemy.url"):
+    config.set_main_option("sqlalchemy.url", settings.database_url)
 target_metadata = Base.metadata
 
 

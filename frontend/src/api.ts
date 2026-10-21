@@ -63,6 +63,7 @@ export async function login(email: string, password: string) {
 export function getCurrentUser() { return request<ApiUser>('/api/me') }
 export function getKnowledgeGaps() { return request<ApiGap[]>('/api/knowledge-gaps') }
 export function analyzeKnowledgeGap(id: string) { return request<{ analysis: NonNullable<ApiGap['ai_analysis']>; persisted: boolean }>(`/api/knowledge-gaps/${id}/analyze`, { method: 'POST' }) }
+export function validateAIFinding(id: string, comment = '') { return request<ApiGap>(`/api/knowledge-gaps/${id}/validate-finding`, { method: 'POST', body: JSON.stringify({ comment }) }) }
 export function generateGapQuestions(id: string) { return request<ApiGapQuestions>(`/api/knowledge-gaps/${id}/questions`, { method: 'POST' }) }
 export function captureKnowledge(id: string, answer: string) { return request<ApiGap>(`/api/knowledge-gaps/${id}/capture`, { method: 'POST', body: JSON.stringify({ answer }) }) }
 export function structureKnowledgeAnswer(id: string, question: string, answer: string) {

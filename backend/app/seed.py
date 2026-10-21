@@ -53,13 +53,13 @@ def seed_demo_data() -> None:
         for name in ["Payment architecture", "Retry mechanism", "Gateway behaviour", "Refund reconciliation", "Deployment"]:
             area = db.scalar(select(KnowledgeArea).where(KnowledgeArea.service_id == payment_service.id, KnowledgeArea.name == name))
             if area is None:
-                area = KnowledgeArea(service_id=payment_service.id, name=name, status="verified" if name in {"Payment architecture", "Retry mechanism", "Deployment"} else "needs_review", criticality="high")
+                area = KnowledgeArea(organization_id=organization.id, service_id=payment_service.id, name=name, status="verified" if name in {"Payment architecture", "Retry mechanism", "Deployment"} else "needs_review", criticality="high")
                 db.add(area)
                 db.flush()
             areas[name] = area
         for index, (title, description, priority) in enumerate(GAPS):
             if db.scalar(select(KnowledgeGap).where(KnowledgeGap.service_id == payment_service.id, KnowledgeGap.title == title)) is None:
-                db.add(KnowledgeGap(service_id=payment_service.id, knowledge_area_id=areas[list(areas)[index + 1]].id if index + 1 < len(areas) else areas["Gateway behaviour"].id, title=title, description=description, priority=priority, status="open"))
+                db.add(KnowledgeGap(organization_id=organization.id, service_id=payment_service.id, knowledge_area_id=areas[list(areas)[index + 1]].id if index + 1 < len(areas) else areas["Gateway behaviour"].id, title=title, description=description, priority=priority, status="open"))
         db.commit()
 
 

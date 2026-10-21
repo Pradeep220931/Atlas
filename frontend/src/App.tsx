@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Navigate, NavLink, Outlet, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Navigate, NavLink, Outlet, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Activity, ArrowRight, Bell, BookOpen, Check, ChevronDown, CircleAlert, Database, ExternalLink, FileText, GitBranch, GitPullRequest, LayoutDashboard, LogOut, Map, Menu, RefreshCw, Search, Settings, Shield, SlidersHorizontal, Users, X, Zap } from 'lucide-react'
 import { demoUsers, progress, useAtlas, type Role, type TransitionArea } from './store'
-import { analyzeGitHubPullRequest, analyzeKnowledgeGap, generateGapQuestions, getAiConnectionStatus, getGitHubPullRequestEvidence, getGitHubPullRequests, getGitHubRepositories, getKnowledgeRecords, structureKnowledgeAnswer, testAiConnection, type ApiGapQuestions, type ApiKnowledgeRecord, type GitHubAnalysis, type GitHubEvidence, type GitHubPullRequest, type GitHubRepository } from './api'
+import { analyzeGitHubPullRequest, analyzeKnowledgeGap, generateGapQuestions, getAiConnectionStatus, getGitHubPullRequestEvidence, getGitHubPullRequests, getGitHubRepositories, getKnowledgeRecords, structureKnowledgeAnswer, testAiConnection, validateAIFinding, type ApiGapQuestions, type ApiKnowledgeRecord, type GitHubAnalysis, type GitHubEvidence, type GitHubPullRequest, type GitHubRepository } from './api'
 
 const roleLabels: Record<Role, string> = { manager: 'Engineering Manager', holder: 'Knowledge Holder', incoming: 'Incoming Engineer', admin: 'Admin / CTO' }
 const nav: Record<Role, { label: string; to: string; icon: typeof Map }[]> = {
@@ -101,6 +101,7 @@ function GitHubEvidencePage() {
   const [selectedPullRequest, setSelectedPullRequest] = useState<GitHubPullRequest | null>(null)
   const [evidence, setEvidence] = useState<GitHubEvidence | null>(null)
   const [analysis, setAnalysis] = useState<GitHubAnalysis | null>(null)
+  const [findingValidated, setFindingValidated] = useState(false)
   const [loading, setLoading] = useState('repositories')
   const [error, setError] = useState('')
   const [refreshCount, setRefreshCount] = useState(0)
@@ -112,6 +113,7 @@ function GitHubEvidencePage() {
     setSelectedPullRequest(null)
     setEvidence(null)
     setAnalysis(null)
+    setFindingValidated(false)
     try {
       setRepositories(await getGitHubRepositories())
       setRefreshCount(count => count + 1)
@@ -129,6 +131,7 @@ function GitHubEvidencePage() {
     setSelectedPullRequest(null)
     setEvidence(null)
     setAnalysis(null)
+    setFindingValidated(false)
     setLoading('pull-requests')
     setError('')
     try {
@@ -145,6 +148,7 @@ function GitHubEvidencePage() {
     setSelectedPullRequest(pullRequest)
     setEvidence(null)
     setAnalysis(null)
+    setFindingValidated(false)
     setLoading('evidence')
     setError('')
     try {
@@ -227,7 +231,7 @@ function GitHubEvidencePage() {
               <ol className="ai-trace-list">{analysis.stages.map(stage => <li className={stage.status} key={stage.id}><span className="ai-trace-marker">{stage.status === 'complete' ? '✓' : '–'}</span><span><strong>{stage.label}</strong><small>{stage.detail}</small></span></li>)}</ol>
             </Section>
             <Section title="Claude structured result">
-              <div className="ai-result-card"><div className="card-meta"><Badge tone={analysis.analysis.potential_gap ? 'attention' : 'neutral'}>{analysis.analysis.potential_gap ? 'Potential knowledge gap' : 'No potential gap supported'}</Badge><span>Confidence {Math.round(analysis.analysis.confidence * 100)}%</span></div><h2>{analysis.analysis.title}</h2><p>{analysis.analysis.summary}</p><p><strong>Why it matters:</strong> {analysis.analysis.reason}</p><div className="generated-question"><span className="eyebrow">TARGETED QUESTION</span><p>{analysis.analysis.targeted_question}</p></div><small>Verified evidence IDs: {analysis.evidence_ids.join(', ')}</small>{analysis.persisted ? <p className="success-text">Persisted knowledge gap: {analysis.knowledge_gap_id}</p> : <p>No knowledge gap row was created because Claude did not identify a supported potential gap.</p>}{analysis.persisted && <button className="secondary" onClick={() => navigate('/app/knowledge-gaps')}>Open Knowledge Gaps <ArrowRight size={15} /></button>}</div>
+              <div className="ai-result-card"><div className="card-meta"><Badge tone={findingValidated ? 'healthy' : analysis.analysis.potential_gap ? 'attention' : 'neutral'}>{findingValidated ? 'Finding validated' : analysis.analysis.potential_gap ? 'Potential knowledge gap' : 'No potential gap supported'}</Badge><span>Confidence {Math.round(analysis.analysis.confidence * 100)}%</span></div><h2>{analysis.analysis.title}</h2><p>{analysis.analysis.summary}</p><p><strong>Why it matters:</strong> {analysis.analysis.reason}</p><div className="why-gap"><span className="eyebrow">WHY THIS GAP?</span><p>{analysis.analysis.reason}</p><small>Deterministic signals are shown above; only those source-backed signals were supplied to Claude.</small></div><div className="generated-question"><span className="eyebrow">TARGETED QUESTION</span><p>{analysis.analysis.targeted_question}</p></div><small>Verified evidence IDs: {analysis.evidence_ids.join(', ')}</small>{analysis.persisted ? <p className="success-text">Persisted knowledge gap: {analysis.knowledge_gap_id}</p> : <p>No knowledge gap row was created because Claude did not identify a supported potential gap.</p>}{analysis.persisted && <div className="proposal-actions"><button className="secondary" onClick={() => { const query = new URLSearchParams({ question: analysis.analysis.targeted_question }); navigate(`/app/knowledge/capture/${analysis.knowledge_gap_id}?${query.toString()}`) }}>Ask Knowledge Holder <ArrowRight size={15} /></button><button className="secondary" disabled={findingValidated || user?.role !== 'manager'} onClick={async () => { try { await validateAIFinding(analysis.knowledge_gap_id); setFindingValidated(true); await refreshGaps() } catch (reason) { setError(reason instanceof Error ? reason.message : 'Finding validation failed.') } }}>{findingValidated ? 'Validated' : 'Validate Finding'}</button><button className="quiet" onClick={() => navigate('/app/knowledge-gaps')}>Open Knowledge Gaps</button></div>}</div>
             </Section>
           </>}
         </>}
@@ -288,8 +292,10 @@ function KnowledgeGaps() {
 
 function Capture() {
   const { id = '' } = useParams()
+  const [searchParams] = useSearchParams()
   const { gaps, validateGap, reviewKnowledge, user } = useAtlas()
   const gap = gaps.find(item => item.id === id)
+  const question = searchParams.get('question')?.trim() || `What context should the next engineer understand about ${gap?.title.toLowerCase() ?? 'this change'}?`
   const [answer, setAnswer] = useState('')
   const [records, setRecords] = useState<ApiKnowledgeRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -338,7 +344,7 @@ function Capture() {
     setStructuring(true)
     setError('')
     try {
-      await structureKnowledgeAnswer(id, `What context should the next engineer understand about ${gap?.title ?? 'this change'}?`, answer)
+      await structureKnowledgeAnswer(id, question, answer)
       await refreshRecords()
       setAnswer('')
     } catch (reason) {
@@ -352,8 +358,8 @@ function Capture() {
   return <Page eyebrow="KNOWLEDGE CAPTURE" title="Capture knowledge" subtitle={`${gap.service} / ${gap.title}`}>
     <div className="capture-layout">
       <div className="capture-main">
-        <div className="notice"><CircleAlert size={18} /><span>No supporting evidence is linked to this gap. Submitted context remains a proposal until a manager reviews it.</span></div>
-        <div className="question-block"><span className="eyebrow">TARGETED QUESTION</span><h2>What context should the next engineer understand about {gap.title.toLowerCase()}?</h2><textarea value={answer} onChange={event => setAnswer(event.target.value)} placeholder="Share the technical reasoning, constraints, and trade-offs..." /></div>
+        <div className="notice"><CircleAlert size={18} /><span>{gap.ref === 'No source evidence linked' ? 'No supporting source evidence is linked to this seeded gap.' : `Source evidence is linked: ${gap.ref}.`} Submitted context remains a proposal until a manager reviews it.</span></div>
+        <div className="question-block"><span className="eyebrow">TARGETED QUESTION</span><h2>{question}</h2><textarea value={answer} onChange={event => setAnswer(event.target.value)} placeholder="Share the technical reasoning, constraints, and trade-offs..." /></div>
         {error && <p className="error-text" role="alert">{error}</p>}
         <div className="proposal-actions"><button className="primary" onClick={submitAnswer} disabled={!answer.trim() || saving || structuring}>{saving ? 'Submitting...' : 'Submit answer'} <ArrowRight size={16} /></button><button className="secondary" onClick={structureAnswer} disabled={!answer.trim() || saving || structuring}>{structuring ? 'Structuring...' : 'Structure with AI'}</button></div>
         <Section title="Submitted knowledge">

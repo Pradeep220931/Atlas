@@ -153,3 +153,11 @@ def to_github_context(repository: str, evidence: dict[str, Any]) -> dict[str, An
         "incidents": "No incident evidence supplied to this analysis.",
         "evidence": context_evidence,
     }
+
+
+def has_sufficient_analysis_evidence(evidence: dict[str, Any]) -> bool:
+    pull_request = evidence["pull_request"]
+    has_body = bool(str(pull_request.get("body") or "").strip())
+    has_patch = any(bool(str(file.get("patch") or "").strip()) for file in evidence["files"])
+    has_commit_message = any(bool(str(((commit.get("commit") or {}).get("message") or "")).strip()) for commit in evidence["commits"])
+    return has_body or has_patch or has_commit_message
